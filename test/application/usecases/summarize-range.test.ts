@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { SummarizeRangeUseCase } from '../../../src/application/usecases/summarize-range.js';
+import { Compactor } from '../../../src/application/compaction/compactor.js';
 import { parse } from '../../../src/domain/range/parse.js';
 import { asMessageId, asThreadId, asUserId } from '../../../src/domain/model/ids.js';
 import type { AnswerContent } from '../../../src/domain/model/answer.js';
@@ -12,6 +13,7 @@ import type { InvocationContext } from '../../../src/application/ports/driving/i
 import type { SummarizeRangeCommand } from '../../../src/application/ports/driving/summarize-range.js';
 import { at, CHAT_A, makeMessage, T0, USER_ALA, USER_OLA } from '../../conformance/support.js';
 import { FakeChatGateway } from '../../fakes/fake-chat-gateway.js';
+import { FakeChunkStore } from '../../fakes/fake-chunk-store.js';
 import { FakeClock } from '../../fakes/fake-clock.js';
 import { FakeConfig, TEST_ENV_LAYER } from '../../fakes/fake-config.js';
 import { FakeLlm } from '../../fakes/fake-llm.js';
@@ -30,6 +32,7 @@ function makeDeps(config?: FakeConfig) {
     llm: new FakeLlm(),
     clock: new FakeClock(T0.add({ hours: 5 })),
     config: config ?? new FakeConfig({ env: TEST_ENV_LAYER }),
+    chunks: new FakeChunkStore(),
   };
 }
 
@@ -225,25 +228,167 @@ describe('SummarizeRangeUseCase', () => {
     expect(outcome).toEqual({ kind: 'refused', code: 'corpus.empty' });
   });
 
-  it('refuses with corpus.too_large when the token count exceeds maxInputTokens, without calling the model', async () => {
-    const config = new FakeConfig({
-      file: {
-        telegram: { allowlist: [CHAT_A] },
-        bot: { operatorContact: '@op' },
-        limits: { maxInputTokens: 1 },
-      },
-      env: TEST_ENV_LAYER,
+  describe('over-threshold ranges (DESIGN §7 "Over-budget behaviour" + "Compaction", WS10/WS11 hand-off)', () => {
+    function overThresholdConfig(overrides: { compactThreshold?: number; maxInputTokens?: number } = {}): FakeConfig {
+      return new FakeConfig({
+        file: {
+          telegram: { allowlist: [CHAT_A] },
+          bot: { operatorContact: '@op' },
+          limits: {
+            maxInputTokens: overrides.maxInputTokens ?? 1,
+            ...(overrides.compactThreshold === undefined ? {} : { compactThreshold: overrides.compactThreshold }),
+          },
+        },
+        env: TEST_ENV_LAYER,
+      });
+    }
+
+    it('warns, then compacts and answers, instead of refusing, when the raw corpus exceeds maxInputTokens', async () => {
+      // `compactThreshold` is left at its generous default (60,000) — only
+      // `maxInputTokens` (the single-shot ceiling) is tiny, so the corpus is
+      // "over threshold" for the direct call but trivially fits one map leaf.
+      const smallDeps = makeDeps(overThresholdConfig());
+      await smallDeps.messages.upsertMany(CHAT_A, [
+        makeMessage({ messageId: 1, text: 'this transcript is definitely more than a single token long' }),
+      ]);
+      smallDeps.llm.enqueue(
+        { raw: { summary: 'chunk summary', keyPoints: [], tone: 'neutral' } },
+        { raw: { summary: 'final answer after compaction', keyPoints: ['a key point'], unanswered: [], tone: 'neutral' } },
+      );
+
+      const outcome = await new SummarizeRangeUseCase(smallDeps).execute(command(makeInvocation()));
+
+      expect(outcome.kind).toBe('answered');
+      if (outcome.kind !== 'answered') return;
+      expect(outcome.delivered.answer.content.summary).toBe('final answer after compaction');
+      // The reduce phase's model produced the final answer (DESIGN §7).
+      expect(outcome.delivered.answer.meta.model).toBe('claude-sonnet-5');
+
+      // Map phase used the cheap model, reduce phase the strong one — routed
+      // through the same `routeModel` every other call uses.
+      const mapRequests = smallDeps.llm.requests.filter((r) => r.phase === 'map');
+      const reduceRequests = smallDeps.llm.requests.filter((r) => r.phase === 'reduce');
+      expect(mapRequests).toHaveLength(1);
+      expect(mapRequests[0]?.model).toBe('claude-haiku-4-5');
+      expect(reduceRequests).toHaveLength(1);
+      expect(reduceRequests[0]?.model).toBe('claude-sonnet-5');
+
+      // Warned first, visibly, before compacting (DESIGN §7: "warn and
+      // suggest a narrower range") — never a silent switch to map-reduce.
+      const gateway = smallDeps.gateway;
+      expect(gateway.sent).toHaveLength(1);
+      expect(gateway.sent[0]?.params.text).toMatch(/large|duż/i);
+      // The final answer replaced that same placeholder — no second message.
+      expect(gateway.edits[gateway.edits.length - 1]?.messageId).toBe(gateway.sent[0]?.messageId);
     });
-    const smallDeps = makeDeps(config);
-    await smallDeps.messages.upsertMany(CHAT_A, [
-      makeMessage({ messageId: 1, text: 'this transcript is definitely more than a single token long' }),
-    ]);
 
-    const outcome = await new SummarizeRangeUseCase(smallDeps).execute(command(makeInvocation()));
+    it('reuses the chunk cache on a second identical over-threshold call, and a bumped prompt_version misses it', async () => {
+      const smallDeps = makeDeps(overThresholdConfig());
+      const rows = [makeMessage({ messageId: 1, text: 'this transcript is definitely more than a single token long' })];
+      await smallDeps.messages.upsertMany(CHAT_A, rows);
+      smallDeps.llm.respond = (request) =>
+        request.output.name === 'chunk_summary_content'
+          ? { summary: 'chunk summary', keyPoints: [], tone: 'neutral' }
+          : { summary: 'final answer', keyPoints: ['a key point'], unanswered: [], tone: 'neutral' };
 
-    expect(outcome).toEqual({ kind: 'refused', code: 'corpus.too_large' });
-    expect((smallDeps.llm).requests).toHaveLength(0);
-    expect((smallDeps.llm).tokenCountRequests.length).toBeGreaterThan(0);
+      const first = await new SummarizeRangeUseCase(smallDeps).execute(command(makeInvocation()));
+      expect(first.kind).toBe('answered');
+      const callsAfterFirst = smallDeps.llm.requests.length;
+      expect(callsAfterFirst).toBe(2); // one map call, one final reduce call
+      expect(smallDeps.chunks.dump(CHAT_A).length).toBeGreaterThan(0);
+
+      const second = await new SummarizeRangeUseCase(smallDeps).execute(
+        command(makeInvocation({ invokedMessageId: asMessageId(9001) })),
+      );
+      expect(second.kind).toBe('answered');
+      // The map leaf is a cache hit the second time round; only the final
+      // call (DESIGN §7 / `compactor.ts`: "never cached, because that call is
+      // the delivered answer") reaches the provider again.
+      expect(smallDeps.llm.requests.length).toBe(callsAfterFirst + 1);
+
+      // A bumped `prompt_version`, run straight through `Compactor` against
+      // the exact `ChunkStore` and messages the pipeline just wrote to, must
+      // not collide with what is already cached there (DESIGN §7: "Chunk
+      // cache key includes `model` and `prompt_version`, or you serve
+      // summaries from a prompt you have since fixed").
+      const bumped = await new Compactor({ llm: smallDeps.llm, chunks: smallDeps.chunks, clock: smallDeps.clock }).compact({
+        chatId: CHAT_A,
+        messages: rows,
+        timeZone: 'Europe/Warsaw',
+        compactThreshold: 60_000,
+        models: { map: 'claude-haiku-4-5', reduce: 'claude-sonnet-5' },
+        maxOutputTokens: 4096,
+        promptVersion: 'v2-bumped',
+        language: 'pl',
+        intent: 'summarize',
+        question: null,
+      });
+      expect(bumped.calls.every((call) => !call.cached)).toBe(true);
+    });
+
+    it('throttles compaction progress edits into the placeholder (~1 edit / 3s)', async () => {
+      // A low `compactThreshold` forces one map call per message (five
+      // messages, each its own 6h+ bucket), so the compaction reports
+      // progress five times before the single final call — enough to prove
+      // the throttle actually drops reports rather than passing every one
+      // through.
+      // `maxInputTokens` sits between one bucket's own call size (~720
+      // tokens: the map system prompt plus one short message) and the
+      // single-shot total (~1,100 tokens: system + recap + all 5 messages)
+      // — enough to trip compaction without tripping the atomic hard cap.
+      const smallDeps = makeDeps(overThresholdConfig({ compactThreshold: 1, maxInputTokens: 900 }));
+      // Each message > 6h apart from the last, so each becomes its own
+      // bucket / map call (mirrors `compactor.test.ts`'s own `corpus()`
+      // helper). All safely in the past relative to the clock advanced below.
+      const spacedMessages = Array.from({ length: 5 }, (_unused, index) =>
+        makeMessage({ messageId: index + 1, ts: at(index * 60 * 7), text: `message number ${String(index)}` }),
+      );
+      await smallDeps.messages.upsertMany(CHAT_A, spacedMessages);
+      smallDeps.clock.advance({ hours: 72 });
+      smallDeps.llm.respond = (request) =>
+        request.output.name === 'chunk_summary_content'
+          ? { summary: 'chunk summary', keyPoints: [], tone: 'neutral' }
+          : { summary: 'final answer', keyPoints: ['a key point'], unanswered: [], tone: 'neutral' };
+
+      // `-5`: last-N-messages range, so this does not depend on the default
+      // 2-day window lining up with the (now clock-advanced) message spread.
+      const outcome = await new SummarizeRangeUseCase(smallDeps).execute(command(makeInvocation(), '-5'));
+
+      expect(outcome.kind).toBe('answered');
+      const mapCalls = smallDeps.llm.requests.filter((r) => r.phase === 'map');
+      expect(mapCalls.length).toBeGreaterThanOrEqual(5);
+
+      // The fake clock never advances during this synchronous run, so the
+      // throttle window never elapses between reports: only the always-sent
+      // first report and the always-sent completing report get through,
+      // never one edit per report.
+      const gateway = smallDeps.gateway;
+      const totalPossibleReports = mapCalls.length + 1; // + the final reduce's 1/1 report
+      expect(gateway.edits.length).toBeLessThan(totalPossibleReports);
+      expect(gateway.edits.some((edit) => /\d+\/\d+/.test(edit.params.text))).toBe(true);
+    });
+
+    it('still refuses with corpus.too_large when even a single atomic message cannot fit maxInputTokens after compaction', async () => {
+      // Both ceilings tiny: `compactThreshold` this small forces the
+      // over-threshold split path even for one message, and a lone message
+      // cannot be split any further — the genuinely unservable case.
+      const smallDeps = makeDeps(overThresholdConfig({ compactThreshold: 1 }));
+      await smallDeps.messages.upsertMany(CHAT_A, [
+        makeMessage({ messageId: 1, text: 'this transcript is definitely more than a single token long' }),
+      ]);
+
+      const outcome = await new SummarizeRangeUseCase(smallDeps).execute(command(makeInvocation()));
+
+      expect(outcome).toEqual({ kind: 'refused', code: 'corpus.too_large' });
+      // Failed during leaf planning, before any `complete()` call was made.
+      expect(smallDeps.llm.requests).toHaveLength(0);
+      expect(smallDeps.llm.tokenCountRequests.length).toBeGreaterThan(0);
+      // The placeholder was warned, then told the range could not be served.
+      const gateway = smallDeps.gateway;
+      expect(gateway.sent).toHaveLength(1);
+      expect(gateway.sent[0]?.params.text).toMatch(/large|duż/i);
+      expect(gateway.edits[gateway.edits.length - 1]?.params.text).toMatch(/too large|zbyt duż/i);
+    });
   });
 
   it('for a message-count range, excludes non-human kinds from both the fetch and the -N count', async () => {

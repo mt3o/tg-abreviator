@@ -22,7 +22,7 @@
  *    request (`AnswerContent`) — never cached, because that call is the
  *    delivered answer, not a reusable intermediate.
  */
-import { EmptyCorpusError, InvalidValueError } from '../../domain/errors.js';
+import { CorpusTooLargeError, EmptyCorpusError, InvalidValueError } from '../../domain/errors.js';
 import { bucketByTime, groupByWeight, partitionByKey } from '../../domain/buckets.js';
 import type { ThreadId } from '../../domain/model/ids.js';
 import type { AnswerContent } from '../../domain/model/answer.js';
@@ -126,7 +126,17 @@ export class Compactor {
       // the weight budget on its own): further looping would never shrink
       // the set. Stop and let the final call absorb what remains, best
       // effort — DESIGN says "repeat on the results", not "repeat forever".
-      if (groups.length === nodes.length) break;
+      if (groups.length === nodes.length) {
+        // Best effort is still bounded by the one ceiling that is not a
+        // knob: a plateaued reduce whose combined text would still blow
+        // `maxInputTokens` is the genuinely-unservable case (constraints:
+        // "when even the compacted result would exceed the budget"). Refuse
+        // rather than let `#finalReduce` make a call that cannot succeed.
+        if (request.maxInputTokens !== undefined && measured > request.maxInputTokens) {
+          throw new CorpusTooLargeError(measured, request.maxInputTokens);
+        }
+        break;
+      }
 
       levels += 1;
       const nextNodes: ChunkNode[] = [];
@@ -179,6 +189,19 @@ export class Compactor {
         const wholeText = formatBucket(bucket.messages, request.timeZone);
         const measured = await this.#bucketTokens(request, wholeText);
         if (measured <= request.compactThreshold) {
+          leaves.push({ threadId, messages: bucket.messages });
+          continue;
+        }
+        if (bucket.messages.length === 1) {
+          // A single message cannot be split any further — it is the atomic
+          // unit. Sitting over `compactThreshold` alone is fine (DESIGN §7:
+          // "the threshold is a cost and attention knob, not a fit
+          // constraint"); sitting over `maxInputTokens` is not, because no
+          // call this leaf could ever make would fit (DESIGN §7: "one
+          // 10,000-character message can blow a … budget by itself").
+          if (request.maxInputTokens !== undefined && measured > request.maxInputTokens) {
+            throw new CorpusTooLargeError(measured, request.maxInputTokens);
+          }
           leaves.push({ threadId, messages: bucket.messages });
           continue;
         }

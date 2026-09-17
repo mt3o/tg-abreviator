@@ -60,6 +60,21 @@ export interface CompactionRequest {
   /** Required (non-null, non-empty) when `intent === 'answer'`; ignored otherwise. */
   readonly question: string | null;
   /**
+   * The real per-call ceiling (DESIGN §7: "A `MAX_INPUT_TOKENS` ceiling is
+   * checked with `count_tokens` before every call"), distinct from
+   * `compactThreshold`. `compactThreshold` only shapes *how* the corpus is
+   * split — DESIGN §7 is explicit that it "is a cost and attention knob, not
+   * a fit constraint" for a 1M-context model — so an atomic unit (a single
+   * message, or a plateaued reduce round that cannot be grouped any further)
+   * is allowed to sit above `compactThreshold`. It is *not* allowed to sit
+   * above `maxInputTokens`: that is the one call this corpus genuinely cannot
+   * make. When that happens `Compactor.compact()` throws `CorpusTooLargeError`
+   * instead of attempting a call that would just fail or blow the budget.
+   * Optional and unenforced when omitted, so every existing caller/test that
+   * never set it keeps its exact prior behaviour.
+   */
+  readonly maxInputTokens?: number;
+  /**
    * Turns one bucket's raw messages into the `<transcript>` text handed to a
    * map-phase call. Defaults to a minimal internal `[HH:MM] Name: text`
    * formatter (`format-transcript.ts`) so this module is fully self-contained;

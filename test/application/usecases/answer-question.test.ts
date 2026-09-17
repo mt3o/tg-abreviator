@@ -14,6 +14,7 @@ import type { InvocationContext } from '../../../src/application/ports/driving/i
 import type { AnswerQuestionCommand } from '../../../src/application/ports/driving/answer-question.js';
 import { CHAT_A, makeMessage, T0 } from '../../conformance/support.js';
 import { FakeChatGateway } from '../../fakes/fake-chat-gateway.js';
+import { FakeChunkStore } from '../../fakes/fake-chunk-store.js';
 import { FakeClock } from '../../fakes/fake-clock.js';
 import { FakeConfig, TEST_ENV_LAYER } from '../../fakes/fake-config.js';
 import { FakeLlm } from '../../fakes/fake-llm.js';
@@ -32,6 +33,7 @@ function makeDeps() {
     llm: new FakeLlm(),
     clock: new FakeClock(T0.add({ hours: 5 })),
     config: new FakeConfig({ env: TEST_ENV_LAYER }),
+    chunks: new FakeChunkStore(),
   };
 }
 

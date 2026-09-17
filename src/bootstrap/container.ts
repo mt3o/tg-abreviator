@@ -139,7 +139,7 @@ export function buildApplication(ports: DrivenPorts): Application {
     priceFor: (model) => config.get('models').prices[model] ?? zeroPrices(),
   });
 
-  const pipelineDeps = { messages, optOuts, settings, config, gateway, llm: billedLlm, clock };
+  const pipelineDeps = { messages, optOuts, settings, config, gateway, llm: billedLlm, clock, chunks };
   const guardDeps = {
     pipeline: new GuardedPipeline({ clock, usage, globalUsage, errorReporter: reporter }),
     config,
