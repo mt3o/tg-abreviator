@@ -118,8 +118,14 @@ newest covered message has expired**.
 
 **Must implement exactly:** the `/forgetme` cascade — delete the user's messages,
 insert the opt-out row, delete every chunk whose `[first_msg_id, last_msg_id]`
-**overlaps** a deleted message, and replace `user_id` in `usage_events` with a
-**freshly generated random token from `IdGenerator`** (not a hash — DESIGN §5).
+**overlaps** a deleted message, replace `user_id` in `usage_events` with a
+**freshly generated random token from `IdGenerator`** (not a hash — DESIGN §5),
+and **delete the `pseudonyms` row**, which makes any label already in the error
+sink permanently unresolvable (DESIGN §11).
+
+`PseudonymStore.labelFor(chatId, userId)` allocates on first use from a word
+list, scoped per chat, and is expired by the TTL sweeper on the same schedule as
+messages.
 
 **DoD:** the Phase 0 port-conformance suite passes against SQLite exactly as it
 does against the fakes. Plus a cascade test proving no chunk survives a
@@ -283,12 +289,19 @@ The report/don't-report split from DESIGN §11.
 **The scrubber is the deliverable, not a detail.** `sendDefaultPii: false`; a
 `beforeSend` that drops `event.extra` and `event.contexts` wholesale and permits
 only an explicit **tag allowlist**; console and HTTP-body breadcrumbs disabled;
-`chat_id` / `user_id` sent as HMAC'd short tags; errors whose own message may
-carry user content wrapped into a redacted type + local correlation id.
+errors whose own message may carry user content wrapped into a redacted type +
+local correlation id.
+
+**Identities are pseudonyms from `PseudonymStore`** (`chat=quiet-harbor
+user=kind-otter`), resolved through the port — never raw ids, never an HMAC, and
+never real display names. The mapping lives in SQLite precisely so `/forgetme`
+can sever it (DESIGN §11).
 
 **DoD:** a test that constructs events from every error path in the codebase,
 runs them through `beforeSend`, and **asserts no message text, question text,
-display name or raw id survives**. Allowlist, not blocklist — include a test
+real display name or raw id survives** — only allowlisted tags and pseudonyms.
+Plus a test proving a deleted `pseudonyms` row makes a previously-emitted label
+unresolvable. Allowlist, not blocklist — include a test
 adding an unexpected field and proving it is dropped.
 
 ---

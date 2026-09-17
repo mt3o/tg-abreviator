@@ -205,6 +205,10 @@ chat_settings(chat_id, tz, model_alias, updated_by, updated_at)
 user_prefs(chat_id, user_id, dm_delivery)
 opt_outs(chat_id, user_id)
 poll_state(last_update_id, last_seen_at)
+pseudonyms(chat_id, user_id, label, created_at)
+   PK (chat_id, user_id)            -- readable labels for external surfaces (§11);
+                                    -- deleting the row makes the external label
+                                    -- permanently unresolvable
 usage_events(id, ts, chat_id, thread_id, user_id, model, phase,
              input_tokens, output_tokens, cost_micros, unit_prices_json,
              range_spec, question_hash, status)
@@ -240,8 +244,10 @@ That is the whole product, so the controls have to be real.
 - **Chunk TTL = TTL of the chunk's newest covered message.** A cached summary
   must never outlive the messages it summarizes.
 - **`/forgetme`** deletes that user's rows, sets an opt-out flag so future
-  messages are never stored, and **deletes every chunk whose `[first,last]`
-  range overlaps** a deleted message. Coarse, cheap, correct. Without the chunk
+  messages are never stored, **deletes every chunk whose `[first,last]` range
+  overlaps** a deleted message, and **deletes their `pseudonyms` row**, which
+  renders any label already sitting in the error sink permanently unresolvable
+  (§11). Coarse, cheap, correct. Without the chunk
   invalidation, erasure is theatre.
 - Opted-out users are stored as **nothing at all** — not even a placeholder. A
   placeholder is still their data. Cost: their absence leaves holes in
@@ -497,18 +503,57 @@ So scrubbing is part of the feature, not hardening to add later:
 - A **`beforeSend` hook that drops `event.extra` and `event.contexts` wholesale**
   and permits only an explicit tag allowlist. Allowlist, never blocklist — a
   blocklist fails open the first time someone adds a field.
-- **Never attach** message text, question text, display names, or rendered
-  output. Attach shapes and identifiers: message counts, token counts, range
-  spec, model, `prompt_version`, pipeline phase.
-- `chat_id` and `user_id` go as **HMAC'd short tags**, not raw, so the error
-  stream is not a membership list. Stable within a deployment, so operators can
-  still correlate.
+- **Never attach** message text, question text, real display names, or rendered
+  output. Attach shapes: message counts, token counts, range spec, model,
+  `prompt_version`, pipeline phase.
+- **Identities go as pseudonyms, never raw** — see below.
 - **Disable console and HTTP-body breadcrumbs.** Console breadcrumbs will
   cheerfully capture the transcript you logged three lines earlier.
 - Errors that carry user content *in their own message* are the dangerous case —
   a provider 400 echoing the prompt, a SQLite error quoting a row. Wrap them:
   report a redacted error type plus a local correlation id, and keep the full
   text in local logs only.
+
+### Pseudonymous names, resolved locally
+
+Errors need *some* identity or they are useless — you cannot tell whether one
+user hit a bug forty times or forty users hit it once. So the bot sends a
+**readable pseudonym** rather than nothing, and rather than a raw id.
+
+The mechanism is a **local mapping table**, not a hash:
+
+```
+pseudonyms(chat_id, user_id, label, created_at)   PK (chat_id, user_id)
+```
+
+`label` is a deterministic-on-insert, human-readable token scoped to the chat —
+`kind-otter`, `brisk-heron` — drawn from a word list, with the chat itself
+getting one too. GlitchTip sees `chat=quiet-harbor user=kind-otter`, which is
+greppable, discussable in an issue title, and stable across events.
+
+**Why a mapping table and not an HMAC.** An HMAC is re-derivable: as long as the
+secret exists, any user id can be mapped back to its tag, so the pseudonym is
+re-linkable forever and `/forgetme` cannot reach it. A mapping table inverts
+that — **the linkage lives in your SQLite, where the TTL and `/forgetme` already
+have authority.** Delete the row and the label in GlitchTip becomes permanently
+unresolvable. The external events decay into genuinely anonymous noise rather
+than staying pseudonymous indefinitely.
+
+So the erasure cascade in §5 gains one more step: `/forgetme` and `/forget`
+delete `pseudonyms` rows too, and the TTL sweeper expires them on the same
+schedule as messages.
+
+**Be honest about what this is.** While the mapping row exists, the label is
+*pseudonymised* personal data, not anonymous — GDPR still applies to it, and
+`/forgetme` does not retroactively purge GlitchTip's copy. Two consequences:
+set GlitchTip's per-project event retention **no longer than the message TTL**,
+and say in `/privacy` that error diagnostics carry a pseudonymous identifier
+until the retention window expires.
+
+Pseudonyms are for **external and operator-global surfaces** — GlitchTip, and
+operator-wide stats where identities are not the operator's business. In-chat
+`/tldr stats` uses real display names: everyone in that chat can already see who
+is there, and a pseudonym would just be friction.
 
 ### What is worth reporting
 
