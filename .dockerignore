@@ -1,0 +1,37 @@
+# Keep the build context small and make sure nothing sensitive or
+# environment-specific ever ends up inside an image layer.
+
+.git
+.github
+
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Runtime data: the SQLite file and its WAL/lockfile belong on the host bind
+# mount (DESIGN §3), never baked into or copied through an image.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets and machine-local overrides. config.yaml itself is deliberately
+# NOT ignored here in general, but this repo ships only config.example.yaml —
+# a real config.yaml is a deployment artifact, bind-mounted at runtime
+# (docker-compose.yml), never copied into the image.
+.env
+.env.*
+!.env.example
+config.yaml
+
+docs
+eval
+eslint-fixtures
+test
+*.test.ts
+*.md
+!README.md
+
+.vscode
+.idea

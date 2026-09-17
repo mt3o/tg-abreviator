@@ -90,6 +90,7 @@ export interface ProcessUpdateContext {
   readonly botUserId: UserId;
   readonly gapTracker: GapMarkerTracker;
   readonly messages: MessageStore;
+  readonly config: Config;
 }
 
 export type PollerEventOutcome =
@@ -118,8 +119,14 @@ export async function processUpdate(
 
   // Before the message is stored, not after: a range that later spans this
   // instant must see the hole regardless of whether this particular message
-  // itself survives the ingest checks below (DESIGN §4).
-  await ctx.gapTracker.ensureMarker(chatId, stored.threadId, ctx.messages);
+  // itself survives the ingest checks below (DESIGN §4). Gated on the
+  // allowlist here too — an unauthorised chat gets nothing written, not even
+  // a synthetic gap-marker row (DESIGN §5); `IngestMessage.execute()` makes
+  // the authoritative allowlist decision below, this is only a cheap read to
+  // avoid writing a row we would immediately have to explain away.
+  if (ctx.config.get('telegram').allowlist.includes(chatId)) {
+    await ctx.gapTracker.ensureMarker(chatId, stored.threadId, ctx.messages);
+  }
 
   const command: IngestMessageCommandExt = {
     message: stored,
@@ -219,7 +226,10 @@ export class GrammyUpdatesSource implements TelegramUpdatesSource {
     return await this.#api.raw.getUpdates({
       offset: params.offset,
       timeout: params.timeoutSeconds,
-      allowed_updates: [...params.allowedUpdates],
+      // `params.allowedUpdates` is validated at boot by the config's Zod
+      // schema, not narrowed to this literal union at compile time — the
+      // adapter boundary is exactly where that trust is spent.
+      allowed_updates: params.allowedUpdates as readonly AllowedUpdateKind[],
     });
   }
 }
@@ -237,6 +247,21 @@ export interface PollerDeps {
   readonly gateway: ChatGateway;
   readonly clock: Clock;
   readonly reporter: ErrorReporter;
+  /**
+   * Command dispatch, wired by the composition root (Wave 3) to WS6's
+   * `CommandDispatcher`. Optional because ingestion is a complete product on
+   * its own — milestone M1 in `docs/PLAN.md` ships the ingester with no LLM
+   * and no commands — and because every test in this file drives ingestion
+   * alone.
+   *
+   * It runs *after* `processUpdate` for the same update, so the message
+   * carrying `/tldr` (and every message ahead of it in the batch) is already
+   * stored by the time the command reads the corpus. It is awaited rather
+   * than fired off: Telegram permits one poller, the per-chat concurrency
+   * guard permits one in-flight request, and an un-awaited rejection here
+   * would escape the per-update error handling below.
+   */
+  readonly onUpdate?: (update: Update) => Promise<void>;
 }
 
 /** Backoff between failed poll rounds in `run()`, so an outage does not spin the process. */
@@ -317,8 +342,10 @@ export class TelegramPoller {
               botUserId,
               gapTracker,
               messages: this.#deps.messages,
+              config: this.#deps.config,
             }),
           );
+          await this.#deps.onUpdate?.(update);
         } else {
           outcomes.push(joinOutcome);
         }

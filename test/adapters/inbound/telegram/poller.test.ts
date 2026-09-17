@@ -76,6 +76,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'stored' });
     const rows = env.messages.dump(HOME_CHAT);
@@ -90,6 +91,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'stored' });
     const rows = env.messages.dump(HOME_CHAT);
@@ -103,12 +105,14 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     const outcome = await processUpdate(fixture('edited-message.json'), {
       ingest: env.ingest,
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'updated' });
     const rows = env.messages.dump(HOME_CHAT);
@@ -122,6 +126,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     };
     const first = await processUpdate(fixture('message-non-forum.json'), ctx);
     const replay = await processUpdate(fixture('message-non-forum.json'), ctx);
@@ -138,6 +143,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'skipped', reason: 'opted_out' });
     expect(env.messages.dump(HOME_CHAT)).toHaveLength(0);
@@ -145,7 +151,7 @@ describe('processUpdate — table-driven fixtures', () => {
 
   it('skips a message from a different bot', async () => {
     const raw = fixture('message-other-bot.json');
-    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker: noGap(), messages: env.messages };
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker: noGap(), messages: env.messages, config: env.config };
     const outcome = await processUpdate(raw, ctx);
     expect(outcome).toEqual({ kind: 'skipped', reason: 'other_bot' });
     expect(env.messages.dump(HOME_CHAT)).toHaveLength(0);
@@ -157,6 +163,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'skipped', reason: 'own_message' });
     expect(env.messages.dump(HOME_CHAT)).toHaveLength(0);
@@ -168,6 +175,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'left_chat' });
     expect(env.gateway.leftChats).toContain(OUTSIDE_CHAT);
@@ -180,6 +188,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'skipped', reason: 'no_content' });
   });
@@ -190,6 +199,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'stored' });
     const rows = env.messages.dump(HOME_CHAT);
@@ -203,6 +213,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'stored' });
     expect(env.messages.dump(HOME_CHAT)[0]?.kind).toBe('service');
@@ -214,6 +225,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     const row = env.messages.dump(HOME_CHAT)[0];
     expect(row?.text).not.toContain('sk-ant-api03');
@@ -226,6 +238,7 @@ describe('processUpdate — table-driven fixtures', () => {
       botUserId: BOT_USER_ID,
       gapTracker: noGap(),
       messages: env.messages,
+      config: env.config,
     });
     expect(outcome).toEqual({ kind: 'ignored', reason: 'not_a_message' });
   });
@@ -243,7 +256,7 @@ describe('startup gap detection', () => {
     const startedAt = Temporal.Instant.from('2026-09-17T12:00:00Z'); // 3h gap, threshold 15m
     const gapTracker = new GapMarkerTracker(lastSeenAt, startedAt, 15);
 
-    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages };
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages, config: env.config };
     await processUpdate(fixture('message-non-forum.json'), ctx);
     // A second update in the same (chat, thread) must not add a second marker.
     await processUpdate(fixture('message-with-secret.json'), ctx);
@@ -258,7 +271,7 @@ describe('startup gap detection', () => {
     const lastSeenAt = Temporal.Instant.from('2026-09-17T09:00:00Z');
     const startedAt = Temporal.Instant.from('2026-09-17T12:00:00Z');
     const gapTracker = new GapMarkerTracker(lastSeenAt, startedAt, 15);
-    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages };
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages, config: env.config };
 
     await processUpdate(fixture('message-non-forum.json'), ctx); // General
     await processUpdate(fixture('message-forum-topic.json'), ctx); // topic 7
@@ -271,7 +284,7 @@ describe('startup gap detection', () => {
     const lastSeenAt = Temporal.Instant.from('2026-09-17T11:50:00Z');
     const startedAt = Temporal.Instant.from('2026-09-17T12:00:00Z'); // 10 minutes, threshold 15
     const gapTracker = new GapMarkerTracker(lastSeenAt, startedAt, 15);
-    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages };
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages, config: env.config };
 
     await processUpdate(fixture('message-non-forum.json'), ctx);
     expect(env.messages.dump(HOME_CHAT).some((row) => row.kind === 'gap_marker')).toBe(false);
@@ -280,10 +293,21 @@ describe('startup gap detection', () => {
   it('does not fire on a fresh database (no prior lastSeenAt)', async () => {
     const startedAt = Temporal.Instant.from('2026-09-17T12:00:00Z');
     const gapTracker = new GapMarkerTracker(null, startedAt, 15);
-    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages };
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages, config: env.config };
 
     await processUpdate(fixture('message-non-forum.json'), ctx);
     expect(env.messages.dump(HOME_CHAT).some((row) => row.kind === 'gap_marker')).toBe(false);
+  });
+
+  it('never writes a gap marker into a chat off the allowlist — "store nothing" means nothing', async () => {
+    const lastSeenAt = Temporal.Instant.from('2026-09-17T09:00:00Z');
+    const startedAt = Temporal.Instant.from('2026-09-17T12:00:00Z');
+    const gapTracker = new GapMarkerTracker(lastSeenAt, startedAt, 15);
+    const ctx = { ingest: env.ingest, botUserId: BOT_USER_ID, gapTracker, messages: env.messages, config: env.config };
+
+    const outcome = await processUpdate(fixture('message-unauthorised-chat.json'), ctx);
+    expect(outcome).toEqual({ kind: 'left_chat' });
+    expect(env.messages.dump(OUTSIDE_CHAT)).toHaveLength(0);
   });
 });
 
