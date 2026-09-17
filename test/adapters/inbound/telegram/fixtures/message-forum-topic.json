@@ -1,0 +1,12 @@
+{
+  "update_id": 100002,
+  "message": {
+    "message_id": 502,
+    "from": { "id": 22, "is_bot": false, "first_name": "Ola" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys", "is_forum": true },
+    "date": 1758100060,
+    "message_thread_id": 7,
+    "is_topic_message": true,
+    "text": "release poszedł na prod"
+  }
+}

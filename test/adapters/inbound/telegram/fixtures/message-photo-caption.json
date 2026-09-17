@@ -1,0 +1,14 @@
+{
+  "update_id": 100012,
+  "message": {
+    "message_id": 508,
+    "from": { "id": 22, "is_bot": false, "first_name": "Ola" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100620,
+    "photo": [
+      { "file_id": "AgAD1", "file_unique_id": "u1", "width": 90, "height": 90, "file_size": 1234 },
+      { "file_id": "AgAD2", "file_unique_id": "u2", "width": 800, "height": 800, "file_size": 45678 }
+    ],
+    "caption": "zrzut ekranu z buildem"
+  }
+}

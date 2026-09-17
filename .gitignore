@@ -141,3 +141,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Runtime data: the SQLite file and its WAL/lockfile live on a host bind mount
+# (DESIGN §3). Committing one would publish every group the bot is in.
+data/
+*.db
+*.db-wal
+*.db-shm

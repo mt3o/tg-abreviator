@@ -1,0 +1,10 @@
+{
+  "update_id": 100005,
+  "message": {
+    "message_id": 504,
+    "from": { "id": 777001, "is_bot": true, "first_name": "WeatherBot", "username": "weather_bot" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100260,
+    "text": "Dziś 18°C, lekkie zachmurzenie."
+  }
+}
