@@ -99,37 +99,92 @@ guard, tested.
 
 ---
 
-## 3. Architecture
+## 3. Architecture — ports and adapters
+
+The domain here is small and the I/O around it is large and hostile: Telegram, an
+LLM provider, SQLite, a config file, an error sink. That ratio is what hexagonal
+architecture is for.
 
 ```
-Telegram ──long polling──> Ingester ──> SQLite (messages, chunks, settings, usage)
-                                           │
-Command ──> Permissions ──> Range parser ──┤
-                                           ▼
-                                   Corpus assembly
-                                           │
-                              (over threshold? map-reduce)
-                                           ▼
-                            LLM port ──> registry/router ──> provider
-                                           ▼
-                                 Structured output
-                                           ▼
-                        Render (HTML allowlist) ──> Delivery (throttled)
+src/domain/        pure. No I/O, no framework types, no clock, no randomness.
+src/application/   use cases + port interfaces (driving and driven)
+src/adapters/      one directory per external system
+src/bootstrap/     composition root — the only place that knows all of them
 ```
+
+### What lives in the domain
+
+- **Range grammar** — `parse()` and `resolve()` (`RangeSpec` → `ResolvedRange`)
+- **Bucketing** — deterministic time+count chunk boundaries
+- **Dedupe key** — normalization and hashing
+- **Corpus assembly** and transcript formatting
+- **Output rules** — HTML allowlist escaping, slur substitution, splitting
+- **Permission tiers**
+- **Cost arithmetic** from tokens + unit prices
+
+None of these need a database, a network, or a Telegram type. Nearly every rule
+in §6 marked *code-enforced* is a pure function — that is precisely why it can be
+a guarantee rather than a hope.
+
+### Driven ports (domain calls out)
+
+| Port | Purpose |
+| --- | --- |
+| `MessageStore`, `ChunkStore`, `SettingsStore`, `UsageStore`, `OptOutStore`, `PollStateStore` | persistence |
+| `ChatGateway` | send / edit / getMember / leave / typing / answerCallback |
+| `Llm` | `complete(request) -> {structured, usage}` |
+| `Config` | typed read of resolved configuration |
+| `ErrorReporter` | `capture(error, context)` |
+| `Clock` | `now() -> Temporal.Instant` |
+| `IdGenerator` | random token for anonymisation |
+
+`Clock` and `IdGenerator` are **ports, not imports**. TTL expiry, bucket
+boundaries, dedupe windows and anonymisation tokens all depend on them, and all
+of them need to be deterministic under test.
+
+### Driving ports (outside calls in)
+
+`SummarizeRange`, `AnswerQuestion`, `IngestMessage`, `ForgetUser`, `PurgeChat`,
+`UpdateChatSetting`, `ReadUsage`.
+
+### Adapters
+
+| Adapter | Implements |
+| --- | --- |
+| `inbound/telegram` | grammY poller + command dispatcher → driving ports |
+| `outbound/sqlite` | the six stores, via better-sqlite3 |
+| `outbound/anthropic` | `Llm`, via `@anthropic-ai/sdk` |
+| `outbound/telegram` | `ChatGateway`, via grammY |
+| `outbound/config` | `Config`, via `config-layers` (§10) |
+| `outbound/glitchtip` | `ErrorReporter`, via the Sentry SDK (§11) |
+| `outbound/system` | `Clock`, `IdGenerator` |
+
+### The rule that keeps this honest
+
+**No grammY type, no Anthropic SDK type, no better-sqlite3 type and no
+config-layers type may appear in `src/domain` or `src/application`.** A Telegram
+`Message` becomes a `StoredMessage` at the adapter boundary, and nothing
+downstream knows Telegram exists.
+
+This is the rule that erodes first in every hexagonal codebase, usually via one
+innocent `import type`. So it is enforced mechanically, not by discipline:
+**eslint import boundaries failing CI**. `domain` imports only `domain`;
+`application` imports `domain`; `adapters` import `application` and `domain`;
+only `bootstrap` imports everything.
+
+### Runtime
 
 - **Long polling**, not webhooks: no public URL, no TLS termination, and the
-  persisted `offset` is crash recovery for free. Kept behind an interface so
-  webhook is a swap.
-- **Single instance.** Lockfile + `PRAGMA journal_mode=WAL`, `busy_timeout=5000`,
-  `synchronous=NORMAL`, `foreign_keys=ON`. Known scaling path if ever needed:
-  1 ingester + N workers + Postgres + a job queue — **not** N identical
-  containers, because Telegram permits only one poller.
-- **Node 26** (native `Temporal`, unflagged), TypeScript, grammY,
-  `@anthropic-ai/sdk` behind a provider port.
-- Docker, with the SQLite file on a **host bind mount** (not a named volume).
-  Set `user:` in compose and pre-create the directory — uid/gid mismatch is the
-  classic failure. Never NFS: WAL over NFS corrupts. A documented no-Docker path
-  must also work.
+  persisted `offset` is crash recovery for free. It lives behind the inbound
+  adapter, so webhook support is a second adapter rather than a rewrite.
+- **Single instance**, enforced by lockfile. `PRAGMA journal_mode=WAL`,
+  `busy_timeout=5000`, `synchronous=NORMAL`, `foreign_keys=ON`. Known scaling
+  path: 1 ingester + N workers + Postgres + a queue — **not** N identical
+  containers, because Telegram permits one poller.
+- **Node 26** (native `Temporal`, unflagged), TypeScript, grammY.
+- Docker, SQLite on a **host bind mount** (not a named volume). Set `user:` in
+  compose and pre-create the directory — uid/gid mismatch is the classic
+  failure. Never NFS: WAL over NFS corrupts. A no-Docker path must also work.
 
 ---
 
@@ -201,6 +256,9 @@ That is the whole product, so the controls have to be real.
   requests are handled manually by the operator.
 - Whoever can read the DB can read every group the bot is in. Disk encryption,
   and never log row contents.
+- **The error sink is a second exfiltration path** and is governed by the same
+  rule: nothing that would be deleted by the TTL or by `/forgetme` may ever
+  reach it. See §11.
 
 ---
 
@@ -354,31 +412,119 @@ answer is therefore up to 5 minutes stale, which is the point, so it is labelled
 
 ---
 
-## 10. Configuration
+## 10. Configuration — `config-layers`
 
-Three layers, resolved in this order: **DB chat override → config per-chat
-section → config default → built-in default.** One resolver function, tested.
+Configuration uses [`config-layers`](https://github.com/mt3o/config-layers)
+(`config-layers@^0.4.0` on npm), behind the `Config` port so the domain never
+imports it.
 
-| Layer | Holds | Changed by |
-| --- | --- | --- |
-| **env** | `BOT_TOKEN`, provider API keys, `DATABASE_PATH`, `OPERATOR_USER_IDS`, TTL hard cap | redeploy |
-| **config.yaml** (in git, no secrets) | model registry, routing rules, price table, thresholds, caps, command name, allowlist, slur wordlist, per-chat TTL, defaults | edit + restart |
-| **SQLite** | per-chat tz / model, per-user DM pref, opt-outs | bot commands, live |
+**Layers, lowest priority first:**
 
-- **YAML**, because routing rules are nested and need comments explaining *why* a
-  rule exists.
-- **Zod validation at boot, fail fast.** Specifically: every model referenced by
-  a routing rule exists in the registry; every registry entry's `apiKeyEnv` is
-  actually set; every model in the price table exists. A typo should kill the
-  process at startup with a readable message, not surface as a 400 at 2am.
-- **No hot reload.** Config changes mean a restart. Per-chat settings are live
-  precisely because they are in the DB.
-- Ship `config.example.yaml` with every knob documented inline; the loader
-  deep-merges user config over built-in defaults so a minimal config is 5 lines.
+| # | Layer | Holds | Changed by |
+| --- | --- | --- | --- |
+| 1 | `defaults` | built-in, in code | a release |
+| 2 | `file` | `config.yaml` — model registry, routing rules, price table, thresholds, caps, command name, allowlist, slur wordlist, per-chat TTL | edit + restart |
+| 3 | `env` | `BOT_TOKEN`, provider API keys, `DATABASE_PATH`, `OPERATOR_USER_IDS`, TTL hard cap, `GLITCHTIP_DSN` | redeploy |
+| 4 | `chat` | per-chat tz / model, from SQLite | bot commands, live |
+
+Layers 1–3 are built once at boot with `LayeredConfig.fromLayersAsync`.
+
+**Per-chat overrides use `__derive`:**
+`cfg.__derive({ name: 'chat', config: settingsRow })`. That replaces the
+hand-rolled precedence resolver entirely — derive is exactly the mechanism the
+library exists for. Derived configs are **cached per `chat_id`** and invalidated
+when a settings command writes, so a Proxy is not constructed per request.
+
+### Validation stays ours
+
+`config-layers` deliberately does not validate at runtime — it relies on static
+types, which an untyped YAML file bypasses completely. So the boot sequence is:
+
+1. Parse `config.yaml`.
+2. **Zod-validate each layer's shape** *before* handing it to `fromLayers`.
+3. Build the layered config.
+4. **Cross-validate the resolved snapshot**: every model referenced by a routing
+   rule exists in the registry; every registry entry's `apiKeyEnv` is actually
+   set; every priced model exists.
+5. Fail fast with a readable message.
+
+Step 4 cannot be a per-layer check — a routing rule in the file may legitimately
+name a model defined in `defaults`. It has to run against the resolved view.
+
+### What the library buys beyond merging
+
+`__inspect(key)` reports **which layer supplied a value**. That becomes an
+operator-only `/tldr config <key>`, answering *"why is this chat on Haiku?"* —
+which is otherwise a genuinely irritating thing to debug across four layers.
+
+### Constraints it imposes
+
+- `__inspect`, `__derive`, `get` and `getAll` are **reserved**; no config key may
+  use those names.
+- The resolved config is frozen. Nothing mutates config at runtime — a settings
+  change writes to SQLite and produces a new derived config.
+- **No hot reload** of the file; restart. Chat settings are live precisely
+  because they are a DB-backed layer.
+- Secrets live in the `env` layer only, referenced from the file by name
+  (`apiKeyEnv: ANTHROPIC_API_KEY`). `config.yaml` is in git.
+- Ship `config.example.yaml` with every knob documented inline; `defaults` means
+  a minimal user config is five lines, not two hundred.
 
 ---
 
-## 11. Quality
+## 11. Observability — GlitchTip
+
+GlitchTip is Sentry-compatible, so `@sentry/node` points at a GlitchTip DSN,
+behind the `ErrorReporter` port. A **no-op adapter** is used when
+`GLITCHTIP_DSN` is unset, so a contributor without a DSN still gets a working
+bot and tests never emit.
+
+Projects follow the convention already in the org (`punktomat-dev` /
+`-preprod` / `-prod`, `ytshield-preprod` / `-prod`): **`tg-abreviator-dev`** and
+**`tg-abreviator-prod`**, platform `node`. DSN per environment.
+
+### This punches a hole in §5 unless it is scrubbed
+
+An error sink receives whatever is attached to the exception — and the natural
+things to attach here are message text, the user's question, display names and
+user ids. All of that would **leave the TTL, leave `/forgetme`'s reach, and land
+on a third-party server**. It is the exact laundering path §5 was written to
+close, arriving through the back door.
+
+So scrubbing is part of the feature, not hardening to add later:
+
+- `sendDefaultPii: false`.
+- A **`beforeSend` hook that drops `event.extra` and `event.contexts` wholesale**
+  and permits only an explicit tag allowlist. Allowlist, never blocklist — a
+  blocklist fails open the first time someone adds a field.
+- **Never attach** message text, question text, display names, or rendered
+  output. Attach shapes and identifiers: message counts, token counts, range
+  spec, model, `prompt_version`, pipeline phase.
+- `chat_id` and `user_id` go as **HMAC'd short tags**, not raw, so the error
+  stream is not a membership list. Stable within a deployment, so operators can
+  still correlate.
+- **Disable console and HTTP-body breadcrumbs.** Console breadcrumbs will
+  cheerfully capture the transcript you logged three lines earlier.
+- Errors that carry user content *in their own message* are the dangerous case —
+  a provider 400 echoing the prompt, a SQLite error quoting a row. Wrap them:
+  report a redacted error type plus a local correlation id, and keep the full
+  text in local logs only.
+
+### What is worth reporting
+
+**Report:** unhandled exceptions; provider errors after retries; Telegram 5xx and
+unexpected 4xx; config validation failure at boot; TTL sweeper failure; lockfile
+contention; budget-cap trips.
+
+**Do not report:** `429` with `retry_after`, `403` on a DM attempt, or a user
+typing a bad range token. Those are expected and handled — they are metrics, not
+incidents, and reporting them trains you to ignore the inbox.
+
+Tag every event with `release` (git SHA), `environment`, and `prompt_version`.
+
+---
+
+## 12. Quality
 
 You cannot unit-test a summarizer, and it fails *invisibly* — inventing a
 decision nobody made, reading a joke as a plan, missing the one message that
@@ -403,7 +549,7 @@ more than a number would tell you.
 
 ---
 
-## 12. Non-goals
+## 13. Non-goals
 
 - **No backfill.** Not via MTProto, not via a user account. The Bot API cannot
   read history and a user-account login's blast radius (every chat that account

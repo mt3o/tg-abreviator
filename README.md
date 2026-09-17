@@ -11,12 +11,17 @@ question instead and it answers from the chat history. Give it a timeframe
 
 Design complete, implementation not started.
 
+Hexagonal (ports and adapters): a pure domain, use cases behind ports, and one
+adapter per external system — Telegram, Anthropic, SQLite,
+[`config-layers`](https://github.com/mt3o/config-layers) for configuration, and
+GlitchTip for error reporting.
+
 - [`docs/DESIGN.md`](docs/DESIGN.md) — what is being built and why, including the
   Telegram API constraints that shape the whole thing, the privacy/retention
   model, and the safety rules.
-- [`docs/PLAN.md`](docs/PLAN.md) — how it gets built: contracts first, then
-  eleven workstreams with disjoint file ownership, designed to be implemented in
-  parallel.
+- [`docs/PLAN.md`](docs/PLAN.md) — how it gets built: ports and adapters, with
+  contracts frozen first, then thirteen workstreams with disjoint file ownership
+  designed to be implemented in parallel.
 
 ## The one thing to know before running this
 
