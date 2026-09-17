@@ -1,0 +1,16 @@
+{
+  "update_id": 100008,
+  "my_chat_member": {
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "from": { "id": 11, "is_bot": false, "first_name": "Ala" },
+    "date": 1758099900,
+    "old_chat_member": {
+      "status": "left",
+      "user": { "id": 999000001, "is_bot": true, "first_name": "tg_abreviator", "username": "tg_abreviator_test_bot" }
+    },
+    "new_chat_member": {
+      "status": "member",
+      "user": { "id": 999000001, "is_bot": true, "first_name": "tg_abreviator", "username": "tg_abreviator_test_bot" }
+    }
+  }
+}

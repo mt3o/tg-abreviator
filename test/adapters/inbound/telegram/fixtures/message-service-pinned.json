@@ -1,0 +1,15 @@
+{
+  "update_id": 100013,
+  "message": {
+    "message_id": 509,
+    "from": { "id": 11, "is_bot": false, "first_name": "Ala" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100680,
+    "pinned_message": {
+      "message_id": 502,
+      "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+      "date": 1758100060,
+      "text": "release poszedł na prod"
+    }
+  }
+}

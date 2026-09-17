@@ -1,0 +1,11 @@
+{
+  "update_id": 100003,
+  "edited_message": {
+    "message_id": 501,
+    "from": { "id": 11, "is_bot": false, "first_name": "Ala" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100000,
+    "edit_date": 1758100120,
+    "text": "hej, czy ktoś widział build? (edit: już wiem)"
+  }
+}

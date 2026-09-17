@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    /* Language and emit ------------------------------------------------ */
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "sourceMap": true,
+
+    /* Strictness -------------------------------------------------------- */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    /* Unused code is a lint concern, not a compile error: it would block a
+       workstream mid-edit. eslint reports it instead. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "eval/**/*.ts", "*.ts"],
+  "exclude": ["node_modules", "dist", "eslint-fixtures"]
+}

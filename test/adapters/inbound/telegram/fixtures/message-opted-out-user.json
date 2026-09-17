@@ -1,0 +1,10 @@
+{
+  "update_id": 100004,
+  "message": {
+    "message_id": 503,
+    "from": { "id": 33, "is_bot": false, "first_name": "Marek" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100200,
+    "text": "ja się wypisałem, to nie powinno się zapisać"
+  }
+}

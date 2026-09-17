@@ -1,0 +1,10 @@
+{
+  "update_id": 100007,
+  "message": {
+    "message_id": 1,
+    "from": { "id": 55, "is_bot": false, "first_name": "Stranger" },
+    "chat": { "id": -1009999999, "type": "group", "title": "Random group" },
+    "date": 1758100400,
+    "text": "witam, co robi ten bot?"
+  }
+}

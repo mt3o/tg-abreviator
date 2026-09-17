@@ -1,0 +1,10 @@
+{
+  "update_id": 100014,
+  "message": {
+    "message_id": 0,
+    "from": { "id": 11, "is_bot": false, "first_name": "Ala" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100700,
+    "video": { "file_id": "V1", "file_unique_id": "vu1", "width": 100, "height": 100, "duration": 5 }
+  }
+}

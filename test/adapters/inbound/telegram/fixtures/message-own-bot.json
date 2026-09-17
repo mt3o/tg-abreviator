@@ -1,0 +1,10 @@
+{
+  "update_id": 100006,
+  "message": {
+    "message_id": 505,
+    "from": { "id": 999000001, "is_bot": true, "first_name": "tg_abreviator", "username": "tg_abreviator_test_bot" },
+    "chat": { "id": -1009000001, "type": "supergroup", "title": "Deploys" },
+    "date": 1758100320,
+    "text": "🤖 Topic: Deploys · last 2h · 12 messages\n\nPodsumowanie…"
+  }
+}
